@@ -2,6 +2,7 @@ import os
 import time
 import tempfile
 from typing import Optional
+import asyncio
 
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -86,15 +87,33 @@ async def startup_event():
     if not DATABASE_URL:
         print("⚠️ DATABASE_URL not set")
         db_pool = None
-    else:
+        return
+
+    MAX_RETRIES = 5
+    RETRY_DELAY = 5  # Segundos
+
+    for attempt in range(MAX_RETRIES):
         try:
+            print(f"🔗 Attempting to initialize SQL pool (Attempt {attempt + 1}/{MAX_RETRIES})...")
+            # Intenta crear el pool de conexiones
             db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
+            
+            # Prueba la conexión
             async with db_pool.acquire() as conn:
                 await conn.execute("SELECT 1")
-            print("✅ Database SQL pool initialized")
+                
+            print("✅ Database SQL pool initialized successfully")
+            return  # Éxito: sal del bucle y termina la función
+            
         except Exception as e:
-            print(f"❌ Error initializing SQL pool: {e}")
+            print(f"❌ Error initializing SQL pool on attempt {attempt + 1}: {e}")
             db_pool = None
+            if attempt < MAX_RETRIES - 1:
+                print(f"⏳ Retrying in {RETRY_DELAY} seconds...")
+                await asyncio.sleep(RETRY_DELAY)
+            else:
+                print("🚨 Max retries reached. Database initialization failed permanently.")
+                # Si falla después de todos los reintentos, el servidor continuará sin DB.
 
 
 @app.get("/")
@@ -246,31 +265,17 @@ async def upload_avatar(avatar: UploadFile = File(...), user=Depends(get_current
 async def update_profile(payload: UpdateProfileRequest, user=Depends(get_current_user)):
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database not configured")
-
     try:
         user_id = user.get("userId")
-        
-        # 1. Usar conn.execute() para realizar la operación de ESCRITURA (UPDATE)
         async with db_pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE users SET about_me=$1 WHERE id=$2",
+            row = await conn.fetchrow(
+                "UPDATE users SET about_me=$1 WHERE id=$2 RETURNING id, username, email, about_me, profile_image",
                 payload.about_me,
                 user_id,
             )
-
-            # 2. Usar conn.fetchrow() para OBTENER la fila actualizada después de la confirmación.
-            row = await conn.fetchrow(
-                "SELECT id, username, email, about_me, profile_image FROM users WHERE id=$1",
-                user_id,
-            )
-        
-        if row:
-            return {"user": dict(row)}
-        else:
-            raise HTTPException(status_code=404, detail="User not found after update")
-
+        return {"user": dict(row)}
     except Exception as e:
-        print(f"Profile update error: {e}") 
+        print("Profile update error:", e)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
