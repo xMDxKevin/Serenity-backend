@@ -19,14 +19,13 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 JWT_SECRET = os.getenv("JWT_SECRET")
-DATABASE_URL = os.getenv("DATABASE_URL")  # formato recomendado: postgres://user:pass@host:port/dbname?sslmode=require
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not SUPABASE_URL or not SUPABASE_ANON_KEY:
     raise RuntimeError("Supabase configuration missing: SUPABASE_URL or SUPABASE_ANON_KEY")
 if not DATABASE_URL:
-    print("")
-    # Los endpoints que requieren DB devolverán 503 hasta configurarlo
-# Inicialización opcional para permitir acceso a /docs sin credenciales completas
+    print("⚠️ DATABASE_URL not configured")
+
 supabase: Client | None = None
 if SUPABASE_URL and SUPABASE_ANON_KEY:
     try:
@@ -57,7 +56,7 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    username: str  # puede ser username o email
+    username: str
     password: str
 
 
@@ -75,7 +74,7 @@ security = HTTPBearer(auto_error=True)
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])  # { userId, email, exp }
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
         return payload
     except jwt.PyJWTError:
         raise HTTPException(status_code=403, detail="Invalid token")
@@ -85,7 +84,7 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
 async def startup_event():
     global db_pool
     if not DATABASE_URL:
-        print("")
+        print("⚠️ DATABASE_URL not set")
         db_pool = None
     else:
         try:
@@ -96,11 +95,11 @@ async def startup_event():
         except Exception as e:
             print(f"❌ Error initializing SQL pool: {e}")
             db_pool = None
-    try:
-        # Comprobación ligera de cliente de storage
-        print("✅ Supabase storage client initialized")
-    except Exception as e:
-        print(f"❌ Error initializing Supabase client: {e}")
+
+
+@app.get("/")
+async def root():
+    return {"message": "Serenity Zero API", "status": "running"}
 
 
 @app.get("/api/users")
@@ -109,8 +108,9 @@ async def get_users():
         raise HTTPException(status_code=503, detail="Database not configured")
     try:
         async with db_pool.acquire() as conn:
+            # FIX: Query SQL corregida
             rows = await conn.fetch(
-                "age, about_me FROM users ORDER BY username ASC"
+                "SELECT id, username, email, profile_image, about_me FROM users ORDER BY username ASC"
             )
         return {"users": [dict(r) for r in rows]}
     except Exception as e:
@@ -144,14 +144,15 @@ async def get_forum_posts():
         raise HTTPException(status_code=503, detail="Database not configured")
     try:
         async with db_pool.acquire() as conn:
+            # FIX: Query SQL corregida
             rows = await conn.fetch(
                 """
                 SELECT p.id, p.message, p.created_at,
                        u.username AS users_username,
-                       u.profile_image AS users_profiSELECT id, username, profile_imle_image
+                       u.profile_image AS users_profile_image
                 FROM posts p
                 JOIN users u ON p.user_id = u.id
-                ORDER BY p.created_at ASC
+                ORDER BY p.created_at DESC
                 """
             )
         posts = [
@@ -194,6 +195,8 @@ async def create_post(payload: CreatePostRequest, user=Depends(get_current_user)
 async def upload_avatar(avatar: UploadFile = File(...), user=Depends(get_current_user)):
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database not configured")
+    if not supabase:
+        raise HTTPException(status_code=503, detail="Storage not configured")
     try:
         if not avatar.content_type or not avatar.content_type.startswith("image/"):
             raise HTTPException(status_code=400, detail="Only image files are allowed")
@@ -203,7 +206,6 @@ async def upload_avatar(avatar: UploadFile = File(...), user=Depends(get_current
         ext = avatar.filename.split(".")[-1] if avatar.filename and "." in avatar.filename else avatar.content_type.split("/")[1]
         file_name = f"avatar-{user_id}-{int(time.time())}.{ext}"
 
-        # Intentar subir como bytes; si el cliente requiere ruta, usar archivo temporal
         try:
             upload_res = supabase.storage.from_("avatars").upload(file_name, content, file_options={"content-type": avatar.content_type})
         except Exception:
@@ -211,6 +213,7 @@ async def upload_avatar(avatar: UploadFile = File(...), user=Depends(get_current
                 tmp.write(content)
                 tmp.flush()
                 upload_res = supabase.storage.from_("avatars").upload(file_name, tmp.name, file_options={"content-type": avatar.content_type})
+                os.unlink(tmp.name)
 
         if getattr(upload_res, "error", None):
             raise HTTPException(status_code=500, detail="Avatar upload error")
@@ -222,7 +225,7 @@ async def upload_avatar(avatar: UploadFile = File(...), user=Depends(get_current
         elif isinstance(url_res, dict):
             public_url = url_res.get("data", {}).get("publicUrl")
         if not public_url:
-            raise HTTPException(status_code=500, detail="Failed to obtain public URL")
+            public_url = f"{SUPABASE_URL}/storage/v1/object/public/avatars/{file_name}"
 
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -351,5 +354,5 @@ async def get_profile(user=Depends(get_current_user)):
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(os.getenv("PORT", "3000"))
+    port = int(os.getenv("PORT", "8000"))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
