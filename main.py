@@ -41,18 +41,12 @@ db_pool: asyncpg.Pool | None = None
 
 app = FastAPI(title="Serenity Zero API", description="API de Serenity Zero", version="1.0.0")
 
-origins = [
-    "https://serenity-zz.vercel.app", 
-    "http://localhost:3000", 
-    "http://localhost:5173", 
-]
-
 app.add_middleware(
-CORSMiddleware,
-allow_origins=origins, 
-allow_credentials=True,
-allow_methods=["*"],
-allow_headers=["*"],
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
