@@ -246,17 +246,31 @@ async def upload_avatar(avatar: UploadFile = File(...), user=Depends(get_current
 async def update_profile(payload: UpdateProfileRequest, user=Depends(get_current_user)):
     if db_pool is None:
         raise HTTPException(status_code=503, detail="Database not configured")
+
     try:
         user_id = user.get("userId")
+        
+        # 1. Usar conn.execute() para realizar la operación de ESCRITURA (UPDATE)
         async with db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "UPDATE users SET about_me=$1 WHERE id=$2 RETURNING id, username, email, about_me, profile_image",
+            await conn.execute(
+                "UPDATE users SET about_me=$1 WHERE id=$2",
                 payload.about_me,
                 user_id,
             )
-        return {"user": dict(row)}
+
+            # 2. Usar conn.fetchrow() para OBTENER la fila actualizada después de la confirmación.
+            row = await conn.fetchrow(
+                "SELECT id, username, email, about_me, profile_image FROM users WHERE id=$1",
+                user_id,
+            )
+        
+        if row:
+            return {"user": dict(row)}
+        else:
+            raise HTTPException(status_code=404, detail="User not found after update")
+
     except Exception as e:
-        print("Profile update error:", e)
+        print(f"Profile update error: {e}") 
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
