@@ -89,8 +89,8 @@ async def startup_event():
         db_pool = None
         return
 
-    MAX_RETRIES = 5
-    RETRY_DELAY = 5  # Segundos
+    MAX_RETRIES = 10
+    RETRY_DELAY = 10  # Segundos
 
     for attempt in range(MAX_RETRIES):
         try:
