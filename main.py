@@ -89,14 +89,20 @@ async def startup_event():
         db_pool = None
         return
 
-    MAX_RETRIES = 10
-    RETRY_DELAY = 10  # Segundos
+    MAX_RETRIES = 10    # Máximos intentos de reconexión
+    RETRY_DELAY = 10    # Segundos de espera entre intentos
 
     for attempt in range(MAX_RETRIES):
         try:
             print(f"🔗 Attempting to initialize SQL pool (Attempt {attempt + 1}/{MAX_RETRIES})...")
-            # Intenta crear el pool de conexiones
-            db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
+            
+            # 🚨 SOLUCIÓN AL ERROR "prepared statement already exists" 🚨
+            db_pool = await asyncpg.create_pool(
+                DATABASE_URL, 
+                min_size=1, 
+                max_size=5,
+                statement_cache_size=0  # <-- ESTE ES EL CAMBIO CLAVE
+            )
             
             # Prueba la conexión
             async with db_pool.acquire() as conn:
@@ -113,7 +119,6 @@ async def startup_event():
                 await asyncio.sleep(RETRY_DELAY)
             else:
                 print("🚨 Max retries reached. Database initialization failed permanently.")
-                # Si falla después de todos los reintentos, el servidor continuará sin DB.
 
 
 @app.get("/")
